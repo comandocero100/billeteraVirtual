@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billetera Virtual</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: left; vertical-align: top; }
+        #alerta { margin: 10px 0; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2>Billetera Virtual</h2>
+    <button id="btnRecargar">Actualizar Datos</button>
+    <p id="alerta"></p>
+
+    <fieldset>
+        <legend>Crear Cuenta</legend>
+        <label>Nombre Titular:</label>
+        <input type="text" id="txtNombre"><br>
+        <label>Documento:</label>
+        <input type="text" id="txtDocumento"><br>
+        <label>Saldo Inicial:</label>
+        <input type="number" id="txtSaldoInicial" value="0"><br>
+        <button id="btnCrearCuenta">Crear Cuenta</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Depósito / Retiro</legend>
+        <label>Cuenta:</label>
+        <select id="selCuentaOp"></select><br>
+        <label>Monto:</label>
+        <input type="number" id="txtMontoOp"><br>
+        <label>Descripción:</label>
+        <input type="text" id="txtDescOp"><br>
+        <button id="btnDepositar">Depositar</button>
+        <button id="btnRetirar">Retirar</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Transferir</legend>
+        <label>Cuenta Origen:</label>
+        <select id="selOrigen"></select><br>
+        <label>Cuenta Destino:</label>
+        <select id="selDestino"></select><br>
+        <label>Monto:</label>
+        <input type="number" id="txtMontoTrans"><br>
+        <button id="btnTransferir">Enviar Transferencia</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Generar Extracto</legend>
+        <label>Cuenta:</label>
+        <select id="selExtracto"></select>
+        <button id="btnExtracto">Ver Extracto</button>
+        <div id="resultadoExtracto" style="margin-top: 10px;"></div>
+    </fieldset>
+
+    <h3>Cuentas y Movimientos</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Titular</th>
+                <th>Documento</th>
+                <th>Saldo</th>
+                <th>Movimientos</th>
+            </tr>
+        </thead>
+        <tbody id="tablaCuentas"></tbody>
+    </table>
+
+    <script>
+        const API_URL = '/api/billetera';
+        let cuentasLocal = [];
+
+        function mostrarMensaje(texto) {
+            document.getElementById('alerta').textContent = texto;
+        }
+
+        async function cargarCuentas() {
+            let cuentas = [];
+            try {
+                const res = await fetch(`${API_URL}/cuentas`);
+                if (!res.ok) throw new Error();
+                cuentas = await res.json();
+            } catch {
+                cuentas = cuentasLocal;
+            }
+            renderizarVista(cuentas);
+        }
+
+        function renderizarVista(cuentas) {
+            const tbody = document.getElementById('tablaCuentas');
+            const selOp = document.getElementById('selCuentaOp');
+            const selOrigen = document.getElementById('selOrigen');
+            const selDestino = document.getElementById('selDestino');
+
+            const opciones = cuentas.map(c =>
+                `<option value="${c.id}">${c.nombreTitular} ($${c.saldo})</option>`
+            ).join('');
+
+            selOp.innerHTML = opciones;
+            selOrigen.innerHTML = opciones;
+            selDestino.innerHTML = opciones;
+
+            tbody.innerHTML = cuentas.map(c => {
+                const movs = (c.movimientos || []).map(m =>
+                    `<li>${m.tipo}: $${m.monto} (${m.descripcion})</li>`
+                ).join('');
+
+                return `
+                    <tr>
+                        <td>${c.nombreTitular}</td>
+                        <td>${c.numeroDocumento}</td>
+                        <td>$${c.saldo}</td>
+                        <td><ul>${movs}</ul></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function crearCuenta() {
+            const nombreTitular = document.getElementById('txtNombre').value;
+            const numeroDocumento = document.getElementById('txtDocumento').value;
+            const saldoInicial = parseFloat(document.getElementById('txtSaldoInicial').value || 0);
+
+            try {
+                const res = await fetch(`${API_URL}/cuentas`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nombreTitular, numeroDocumento, saldoInicial })
+                });
+                mostrarMensaje(res.ok ? 'Cuenta creada' : await res.text());
+            } catch {
+                if (saldoInicial < 0) return mostrarMensaje('El saldo inicial no puede ser negativo.');
+                cuentasLocal.push({
+                    id: String(Date.now()),
+                    nombreTitular,
+                    numeroDocumento,
+                    saldo: saldoInicial,
+                    movimientos: saldoInicial > 0 ? [{ tipo: 'Apertura', monto: saldoInicial, descripcion: 'Saldo inicial' }] : []
+                });
+                mostrarMensaje('Cuenta creada');
+            }
+            cargarCuentas();
+        }
+
+        async function operarCuenta(tipoOperacion) {
+            const id = document.getElementById('selCuentaOp').value;
+            const monto = parseFloat(document.getElementById('txtMontoOp').value || 0);
+            const descripcion = document.getElementById('txtDescOp').value;
+
+            try {
+                const res = await fetch(`${API_URL}/cuentas/${id}/${tipoOperacion}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ monto, descripcion })
+                });
+                mostrarMensaje(await res.text());
+            } catch {
+                if (monto <= 0) return mostrarMensaje('El monto debe ser mayor a cero.');
+                const c = cuentasLocal.find(x => x.id === id);
+                if (!c) return;
+                if (tipoOperacion === 'retirar' && c.saldo < monto) return mostrarMensaje('Fondos insuficientes.');
+                c.saldo += (tipoOperacion === 'depositar' ? monto : -monto);
+                c.movimientos.push({ tipo: tipoOperacion, monto, descripcion: descripcion || tipoOperacion });
+                mostrarMensaje('Operación realizada');
+            }
+            cargarCuentas();
+        }
+
+        async function transferir() {
+            const cuentaOrigenId = document.getElementById('selOrigen').value;
+            const cuentaDestinoId = document.getElementById('selDestino').value;
+            const monto = parseFloat(document.getElementById('txtMontoTrans').value || 0);
+
+            try {
+                const res = await fetch(`${API_URL}/transferir`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cuentaOrigenId, cuentaDestinoId, monto })
+                });
+                mostrarMensaje(await res.text());
+            } catch {
+                if (monto <= 0) return mostrarMensaje('El monto a transferir debe ser mayor a cero.');
+                const origen = cuentasLocal.find(x => x.id === cuentaOrigenId);
+                const destino = cuentasLocal.find(x => x.id === cuentaDestinoId);
+                if (!origen || !destino || origen.saldo < monto) return mostrarMensaje('Error en transferencia.');
+                origen.saldo -= monto;
+                destino.saldo += monto;
+                origen.movimientos.push({ tipo: 'Transferencia Enviada', monto, descripcion: `A ${destino.nombreTitular}` });
+                destino.movimientos.push({ tipo: 'Transferencia Recibida', monto, descripcion: `De ${origen.nombreTitular}` });
+                mostrarMensaje('Transferencia realizada');
+            }
+            cargarCuentas();
+        }
+
+        document.getElementById('btnRecargar').addEventListener('click', cargarCuentas);
+        document.getElementById('btnCrearCuenta').addEventListener('click', crearCuenta);
+        document.getElementById('btnDepositar').addEventListener('click', () => operarCuenta('depositar'));
+        document.getElementById('btnRetirar').addEventListener('click', () => operarCuenta('retirar'));
+        document.getElementById('btnTransferir').addEventListener('click', transferir);
+
+        cargarCuentas();
+    </script>
+</body>
+</html>
